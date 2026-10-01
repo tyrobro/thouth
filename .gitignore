@@ -1,0 +1,86 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+*.egg
+.eggs/
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# Environment variables — NEVER commit these
+.env
+.env.local
+.env.*.local
+backend/.env
+frontend/.env
+mobile/.env
+
+# Playwright browser session — contains auth cookies
+playwright-sessions/
+*.session
+
+# Ollama model cache (large, local only)
+.ollama/
+
+# Neo4j data directory if run locally in project
+neo4j/data/
+neo4j/logs/
+
+# Node
+node_modules/
+.next/
+.expo/
+dist/
+.turbo/
+*.tsbuildinfo
+
+# Package manager locks (keep one, ignore others)
+yarn.lock
+pnpm-lock.yaml
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+coverage.xml
+*.cover
+
+# Logs
+*.log
+logs/
+npm-debug.log*
+
+# Vercel
+.vercel/
+
+# Cloudflare tunnel credentials
+*.json
+!package.json
+!tsconfig.json
+
+# Weaviate local data (if switched to local later)
+weaviate-data/
+
+# faster-whisper model cache
+whisper-cache/
+
+# OS
+.DS_Store
+Thumbs.db
