@@ -84,3 +84,5 @@ whisper-cache/
 # OS
 .DS_Store
 Thumbs.db
+frontend/.env.local
+frontend/.env

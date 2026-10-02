@@ -1,0 +1,31 @@
+@import "tailwindcss";
+
+* {
+  border-radius: 0 !important;
+  box-sizing: border-box;
+}
+
+html,
+body {
+  background-color: #000000;
+  color: #ffffff;
+  margin: 0;
+  padding: 0;
+}
+
+/* Remove all default focus outlines and replace with sharp white */
+*:focus-visible {
+  outline: 1px solid #ffffff;
+  outline-offset: 2px;
+}
+
+/* Scrollbar — dark to match theme */
+::-webkit-scrollbar {
+  width: 4px;
+}
+::-webkit-scrollbar-track {
+  background: #000;
+}
+::-webkit-scrollbar-thumb {
+  background: #333;
+}
