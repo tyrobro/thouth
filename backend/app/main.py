@@ -29,7 +29,8 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=[
         "http://localhost:3000",
-        "https://thouth.vercel.app",  # update with real Vercel URL later
+        "https://thouth.vercel.app",
+        "https://leon-nonstimulative-dee.ngrok-free.dev",
     ],
     allow_credentials=True,
     allow_methods=["*"],
