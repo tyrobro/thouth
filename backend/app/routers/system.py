@@ -1,6 +1,10 @@
 from fastapi import APIRouter
 import httpx
 from app.core.config import get_settings
+from app.db.neo4j import verify_neo4j_connection
+from app.db.weaviate import verify_weaviate_connection
+from app.db.supabase import verify_supabase_connection
+from app.db.ollama import verify_ollama_connection
 
 router = APIRouter(prefix="/system", tags=["System"])
 settings = get_settings()
@@ -8,7 +12,19 @@ settings = get_settings()
 
 @router.get("/health")
 async def health():
-    return {"status": "healthy", "app": settings.app_name, "env": settings.app_env}
+    services = {
+        "ollama": verify_ollama_connection(),
+        "neo4j": verify_neo4j_connection(),
+        "weaviate": verify_weaviate_connection(),
+        "supabase": verify_supabase_connection(),
+    }
+    all_healthy = all(services.values())
+    return {
+        "status": "healthy" if all_healthy else "degraded",
+        "app": settings.app_name,
+        "env": settings.app_env,
+        "services": services,
+    }
 
 
 @router.get("/models")
