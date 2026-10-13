@@ -1,36 +1,62 @@
 from fastapi import APIRouter, Depends, UploadFile, File, Form, HTTPException
 from typing import Optional
+from pydantic import BaseModel, HttpUrl
 from app.core.auth import get_current_user
 from app.pipelines.ingestion import ingest_text, ingest_pdf, ingest_url
-from app.models.ingest import IngestTextRequest, IngestURLRequest, IngestResponse
+from app.pipelines.embedding import embed_and_store, semantic_search
+from app.pipelines.entity_extraction import extract_entities_from_chunks, get_graph_for_user
+from app.models.ingest import IngestResponse
 import logging
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/knowledge", tags=["Knowledge Weaver"])
 
 
+# ─── Request schemas ──────────────────────────────────────────────────────────
+
+class IngestTextRequest(BaseModel):
+    text: str
+    title: Optional[str] = "Untitled Note"
+    subject: Optional[str] = "general"
+    source: Optional[str] = "manual"
+
+
+class IngestURLRequest(BaseModel):
+    url: HttpUrl
+    title: Optional[str] = None
+    subject: Optional[str] = "general"
+
+
+# ─── Ingest endpoints ─────────────────────────────────────────────────────────
+
 @router.post("/ingest/text", response_model=IngestResponse)
 async def ingest_text_endpoint(
     request: IngestTextRequest,
     user: dict = Depends(get_current_user)
 ):
+    user_id = user["id"]
+    metadata = {
+        "user_id": user_id,
+        "subject": request.subject or "general",
+        "title": request.title or "Untitled Note",
+        "source": request.source or "manual",
+        "content_type": "text",
+    }
     try:
-        metadata = {
-            "user_id": user["id"],
-            "subject": request.subject or "general",
-            "title": request.title or "Untitled Note",
-        }
         chunks = ingest_text(request.text, metadata=metadata)
-        return IngestResponse(
-            status="ok",
-            chunks_created=len(chunks),
-            source="text",
-            subject=request.subject,
-            message=f"Successfully ingested {len(chunks)} chunks"
-        )
+        embed_and_store(chunks, user_id=user_id)
+        extraction = extract_entities_from_chunks(chunks, user_id=user_id, source_id=metadata["source"])
     except Exception as e:
         logger.error(f"Text ingestion failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+    return IngestResponse(
+        status="ok",
+        chunks_created=len(chunks),
+        source=metadata["source"],
+        subject=request.subject,
+        message=f"Ingested {len(chunks)} chunks, extracted {extraction['concepts_added']} concepts"
+    )
 
 
 @router.post("/ingest/pdf", response_model=IngestResponse)
@@ -39,27 +65,33 @@ async def ingest_pdf_endpoint(
     subject: Optional[str] = Form(None),
     user: dict = Depends(get_current_user)
 ):
-    if not file.filename.endswith(".pdf"):
+    if not file.filename.lower().endswith(".pdf"):
         raise HTTPException(status_code=400, detail="Only PDF files are supported")
 
+    user_id = user["id"]
+    metadata = {
+        "user_id": user_id,
+        "subject": subject or "general",
+        "title": file.filename,
+        "source": file.filename,
+        "content_type": "pdf",
+    }
     try:
         file_bytes = await file.read()
-        metadata = {
-            "user_id": user["id"],
-            "subject": subject or "general",
-            "title": file.filename,
-        }
         chunks = ingest_pdf(file_bytes, file.filename, metadata=metadata)
-        return IngestResponse(
-            status="ok",
-            chunks_created=len(chunks),
-            source=file.filename,
-            subject=subject,
-            message=f"Successfully ingested {len(chunks)} chunks from {file.filename}"
-        )
+        embed_and_store(chunks, user_id=user_id)
+        extraction = extract_entities_from_chunks(chunks, user_id=user_id, source_id=file.filename)
     except Exception as e:
         logger.error(f"PDF ingestion failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+    return IngestResponse(
+        status="ok",
+        chunks_created=len(chunks),
+        source=file.filename,
+        subject=subject,
+        message=f"Ingested {len(chunks)} chunks, extracted {extraction['concepts_added']} concepts"
+    )
 
 
 @router.post("/ingest/url", response_model=IngestResponse)
@@ -67,47 +99,68 @@ async def ingest_url_endpoint(
     request: IngestURLRequest,
     user: dict = Depends(get_current_user)
 ):
+    user_id = user["id"]
+    url_str = str(request.url)
+    metadata = {
+        "user_id": user_id,
+        "subject": request.subject or "general",
+        "title": request.title or url_str,
+        "source": url_str,
+        "content_type": "url",
+    }
     try:
-        metadata = {
-            "user_id": user["id"],
-            "subject": request.subject or "general",
-            "title": request.title or request.url,
-        }
-        chunks = ingest_url(request.url, metadata=metadata)
-        return IngestResponse(
-            status="ok",
-            chunks_created=len(chunks),
-            source=request.url,
-            subject=request.subject,
-            message=f"Successfully ingested {len(chunks)} chunks from {request.url}"
-        )
+        chunks = ingest_url(url_str, metadata=metadata)
+        embed_and_store(chunks, user_id=user_id)
+        extraction = extract_entities_from_chunks(chunks, user_id=user_id, source_id=url_str)
     except Exception as e:
         logger.error(f"URL ingestion failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
+    return IngestResponse(
+        status="ok",
+        chunks_created=len(chunks),
+        source=url_str,
+        subject=request.subject,
+        message=f"Ingested {len(chunks)} chunks, extracted {extraction['concepts_added']} concepts"
+    )
+
+
+# ─── Graph + Search ───────────────────────────────────────────────────────────
 
 @router.get("/graph")
 async def get_graph(user: dict = Depends(get_current_user)):
-    # Sprint KW-7
-    return {"status": "ok", "module": "knowledge", "action": "graph"}
+    try:
+        return get_graph_for_user(user["id"])
+    except Exception as e:
+        logger.error(f"Graph fetch failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.get("/search")
-async def search(q: str, user: dict = Depends(get_current_user)):
-    # Sprint KW-5
-    return {"status": "ok", "module": "knowledge", "action": "search", "query": q}
+async def search(q: str, limit: int = 5, user: dict = Depends(get_current_user)):
+    try:
+        results = semantic_search(q, user_id=user["id"], limit=limit)
+        return {"query": q, "results": results}
+    except Exception as e:
+        logger.error(f"Search failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
+
+# ─── Stub routes (future sprints) ─────────────────────────────────────────────
 
 @router.get("/concept/{concept_id}")
 async def get_concept(concept_id: str, user: dict = Depends(get_current_user)):
+    # KW-7
     return {"status": "ok", "concept_id": concept_id}
 
 
 @router.delete("/concept/{concept_id}")
 async def delete_concept(concept_id: str, user: dict = Depends(get_current_user)):
+    # KW-7
     return {"status": "ok", "deleted": concept_id}
 
 
 @router.post("/merge")
 async def merge_concepts(user: dict = Depends(get_current_user)):
+    # KW-6 dedup agent
     return {"status": "ok", "action": "merge"}
