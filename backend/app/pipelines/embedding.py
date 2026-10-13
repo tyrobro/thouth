@@ -2,6 +2,7 @@ from langchain_core.documents import Document
 from app.db.ollama import get_embeddings
 from app.db.weaviate import get_weaviate_client
 from app.db.weaviate_schema import CHUNK_COLLECTION, create_schema
+from app.db.neo4j import get_driver
 import weaviate.classes as wvc
 import uuid
 import logging
@@ -15,7 +16,6 @@ def embed_and_store(chunks: List[Document], user_id: str, concept_id: str = None
     Takes a list of Document chunks, generates embeddings via Ollama,
     and stores them in Weaviate. Returns list of Weaviate object UUIDs.
     """
-    # Ensure schema exists
     create_schema()
 
     embedder = get_embeddings()
@@ -55,18 +55,16 @@ def embed_and_store(chunks: List[Document], user_id: str, concept_id: str = None
 
 
 def embed_query(query: str) -> List[float]:
-    """
-    Embeds a single query string for similarity search.
-    """
+    """Embeds a single query string for similarity search."""
     embedder = get_embeddings()
     return embedder.embed_query(query)
 
 
 def semantic_search(query: str, user_id: str, limit: int = 5) -> List[dict]:
     """
-    Searches Weaviate for chunks semantically similar to the query.
+    Hybrid search: BM25 (keyword) + vector (semantic) combined via Weaviate's
+    hybrid query. Alpha=0.75 weights it 75% semantic, 25% keyword.
     Filters by user_id so users only see their own chunks.
-    Returns list of matching chunks with their content and metadata.
     """
     create_schema()
 
@@ -74,12 +72,14 @@ def semantic_search(query: str, user_id: str, limit: int = 5) -> List[dict]:
     client = get_weaviate_client()
     collection = client.collections.get(CHUNK_COLLECTION)
 
-    results = collection.query.near_vector(
-        near_vector=query_vector,
+    results = collection.query.hybrid(
+        query=query,                  # BM25 uses this
+        vector=query_vector,          # vector search uses this
+        alpha=0.75,                   # 0=pure BM25, 1=pure vector, 0.75=mostly semantic
         limit=limit,
         filters=wvc.query.Filter.by_property("user_id").equal(user_id),
         return_properties=["text", "source", "subject", "title", "content_type", "chunk_index", "concept_id"],
-        return_metadata=wvc.query.MetadataQuery(distance=True),
+        return_metadata=wvc.query.MetadataQuery(score=True),
     )
 
     matches = []
@@ -91,9 +91,41 @@ def semantic_search(query: str, user_id: str, limit: int = 5) -> List[dict]:
             "title": obj.properties.get("title"),
             "content_type": obj.properties.get("content_type"),
             "concept_id": obj.properties.get("concept_id"),
-            "distance": obj.metadata.distance if obj.metadata else None,
+            "score": obj.metadata.score if obj.metadata else None,
             "id": str(obj.uuid),
         })
 
-    logger.info(f"Semantic search returned {len(matches)} results for query: '{query[:50]}'")
+    logger.info(f"Hybrid search returned {len(matches)} results for query: '{query[:50]}'")
     return matches
+
+
+def graph_search(query: str, user_id: str, limit: int = 5) -> dict:
+    from app.db.neo4j import get_driver
+
+    chunks = semantic_search(query, user_id=user_id, limit=limit)
+
+    # Match against any meaningful keyword (>4 chars) from the query
+    keywords = [w for w in query.lower().split() if len(w) > 4]
+    if not keywords:
+        keywords = [query.lower()]
+
+    driver = get_driver()
+    with driver.session() as session:
+        result = session.run(
+            """
+            MATCH (n:Concept {user_id: $user_id})
+            WHERE ANY(kw IN $keywords WHERE
+                toLower(n.title) CONTAINS kw
+                OR toLower(n.summary) CONTAINS kw
+            )
+            RETURN n.id AS id, n.title AS title, n.summary AS summary,
+                   n.subject AS subject, n.mastery_score AS mastery_score
+            LIMIT $limit
+            """,
+            user_id=user_id,
+            keywords=keywords,
+            limit=limit,
+        )
+        concepts = [dict(r) for r in result]
+
+    return {"chunks": chunks, "concepts": concepts}

@@ -6,6 +6,7 @@ from app.pipelines.ingestion import ingest_text, ingest_pdf, ingest_url
 from app.pipelines.embedding import embed_and_store, semantic_search
 from app.pipelines.entity_extraction import extract_entities_from_chunks, get_graph_for_user
 from app.models.ingest import IngestResponse
+from app.pipelines.graph_rag import graph_rag_query
 import logging
 
 logger = logging.getLogger(__name__)
@@ -137,12 +138,28 @@ async def get_graph(user: dict = Depends(get_current_user)):
 
 
 @router.get("/search")
-async def search(q: str, limit: int = 5, user: dict = Depends(get_current_user)):
+async def search_knowledge(
+    q: str,
+    limit: int = 5,
+    rag: bool = True,
+    user: dict = Depends(get_current_user),
+):
+    """
+    Search the user's knowledge base.
+    rag=true (default): Graph RAG — returns LLM answer + supporting evidence.
+    rag=false: raw hybrid search results only (faster, no LLM).
+    """
+    user_id = user["id"]
     try:
-        results = semantic_search(q, user_id=user["id"], limit=limit)
-        return {"query": q, "results": results}
+        if rag:
+            result = graph_rag_query(q, user_id=user_id, limit=limit)
+            return {"query": q, **result}
+        else:
+            from app.pipelines.embedding import semantic_search
+            results = semantic_search(q, user_id=user_id, limit=limit)
+            return {"query": q, "results": results}
     except Exception as e:
-        logger.error(f"Search failed: {e}")
+        logger.error("Search error: %s", e)
         raise HTTPException(status_code=500, detail=str(e))
 
 
