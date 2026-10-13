@@ -7,6 +7,7 @@ from app.pipelines.embedding import embed_and_store, semantic_search
 from app.pipelines.entity_extraction import extract_entities_from_chunks, get_graph_for_user
 from app.models.ingest import IngestResponse
 from app.pipelines.graph_rag import graph_rag_query
+from app.pipelines.deduplication import deduplicate_concepts
 import logging
 
 logger = logging.getLogger(__name__)
@@ -47,6 +48,7 @@ async def ingest_text_endpoint(
         chunks = ingest_text(request.text, metadata=metadata)
         embed_and_store(chunks, user_id=user_id)
         extraction = extract_entities_from_chunks(chunks, user_id=user_id, source_id=metadata["source"])
+        deduplicate_concepts(user_id)
     except Exception as e:
         logger.error(f"Text ingestion failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -82,6 +84,7 @@ async def ingest_pdf_endpoint(
         chunks = ingest_pdf(file_bytes, file.filename, metadata=metadata)
         embed_and_store(chunks, user_id=user_id)
         extraction = extract_entities_from_chunks(chunks, user_id=user_id, source_id=file.filename)
+        deduplicate_concepts(user_id)
     except Exception as e:
         logger.error(f"PDF ingestion failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -113,6 +116,7 @@ async def ingest_url_endpoint(
         chunks = ingest_url(url_str, metadata=metadata)
         embed_and_store(chunks, user_id=user_id)
         extraction = extract_entities_from_chunks(chunks, user_id=user_id, source_id=url_str)
+        deduplicate_concepts(user_id)
     except Exception as e:
         logger.error(f"URL ingestion failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -181,3 +185,14 @@ async def delete_concept(concept_id: str, user: dict = Depends(get_current_user)
 async def merge_concepts(user: dict = Depends(get_current_user)):
     # KW-6 dedup agent
     return {"status": "ok", "action": "merge"}
+
+@router.post("/deduplicate")
+async def deduplicate(user: dict = Depends(get_current_user)):
+    """Merge near-duplicate concept nodes for the current user."""
+    user_id = user["id"]
+    try:
+        result = deduplicate_concepts(user_id)
+        return result
+    except Exception as e:
+        logger.error("Dedup error: %s", e)
+        raise HTTPException(status_code=500, detail=str(e))
